@@ -1,22 +1,24 @@
 /*
 =========================================================
  MYCRAFT WEB ENGINE
- CHUNK SYSTEM v2
-=========================================================
+ CHUNK MESH v3
 
- Мир:
-   Chunk = 16 x 16 блоков
-   Высота мира = 64
+ Главное изменение:
+     1 чанк = 1 общий THREE.Mesh
 
- Система:
-   - динамическая загрузка чанков
-   - выгрузка дальних чанков
-   - генерация terrain
-   - деревья
-   - блоки
-   - игрок
-   - физика
-   - raycast
+ Вместо:
+     1000 блоков = 1000 Mesh
+
+ Получаем:
+     1000 блоков = 1 Mesh
+
+ Также:
+     - скрытые грани не создаются
+     - соседние блоки не рисуют внутренние поверхности
+     - чанки загружаются вокруг игрока
+     - чанки выгружаются вдали
+     - блоки можно ломать
+     - блоки можно ставить
 =========================================================
 */
 
@@ -41,7 +43,7 @@ const JUMP_POWER = 8;
 
 
 /* =====================================================
-   THREE.JS
+   THREE
 ===================================================== */
 
 let scene;
@@ -52,27 +54,25 @@ let renderer;
 
 
 /* =====================================================
-   СОСТОЯНИЕ ИГРЫ
+   WORLD
 ===================================================== */
 
 const chunks = new Map();
 
 const worldBlocks = new Map();
 
-let generatedChunks = new Set();
-
 
 /* =====================================================
-   ИГРОК
+   PLAYER
 ===================================================== */
 
 const player = {
 
-    x: 0,
+    x: 0.5,
 
     y: 20,
 
-    z: 0,
+    z: 0.5,
 
     velocityY: 0,
 
@@ -86,7 +86,7 @@ const player = {
 
 
 /* =====================================================
-   УПРАВЛЕНИЕ
+   INPUT
 ===================================================== */
 
 const keys = {};
@@ -99,15 +99,11 @@ let pointerLocked = false;
 
 
 /* =====================================================
-   ВЫБРАННЫЙ БЛОК
+   BLOCKS
 ===================================================== */
 
 let selectedBlock = "grass";
 
-
-/* =====================================================
-   ТИПЫ БЛОКОВ
-===================================================== */
 
 const BLOCKS = {
 
@@ -155,27 +151,57 @@ const BLOCKS = {
 
 
 /* =====================================================
-   ТЕКУЩЕЕ ВРЕМЯ
-===================================================== */
-
-let lastTime = performance.now();
-
-
-/* =====================================================
    RAYCAST
 ===================================================== */
 
-const raycaster = new THREE.Raycaster();
+const raycaster =
+    new THREE.Raycaster();
 
 
 /* =====================================================
-   ИНИЦИАЛИЗАЦИЯ
+   TIME
+===================================================== */
+
+let lastTime =
+    performance.now();
+
+
+let chunkUpdateTimer = 0;
+
+
+/* =====================================================
+   CHUNK CLASS
+===================================================== */
+
+class Chunk {
+
+    constructor(cx, cz) {
+
+        this.cx = cx;
+
+        this.cz = cz;
+
+        this.blocks = new Map();
+
+        this.mesh = null;
+
+        this.dirty = true;
+
+    }
+
+}
+
+
+/* =====================================================
+   INIT
 ===================================================== */
 
 function init() {
 
     const game =
-        document.getElementById("game");
+        document.getElementById(
+            "game"
+        );
 
 
     /*
@@ -283,7 +309,7 @@ function init() {
 
     /*
     -----------------------------------------------------
-    CONTROLS
+    INPUT
     -----------------------------------------------------
     */
 
@@ -316,7 +342,7 @@ function init() {
 
     /*
     -----------------------------------------------------
-    START
+    LOOP
     -----------------------------------------------------
     */
 
@@ -326,7 +352,7 @@ function init() {
 
 
 /* =====================================================
-   ОСВЕЩЕНИЕ
+   LIGHTING
 ===================================================== */
 
 function createLighting() {
@@ -377,26 +403,20 @@ function createLighting() {
 
 
 /* =====================================================
-   ЧАНКОВАЯ СИСТЕМА
+   CHUNK COORDINATES
 ===================================================== */
-
-
-/*
-Получить координату чанка.
-*/
 
 function worldToChunk(value) {
 
     return Math.floor(
-        value / CHUNK_SIZE
+
+        value /
+        CHUNK_SIZE
+
     );
 
 }
 
-
-/*
-Ключ чанка.
-*/
 
 function chunkKey(cx, cz) {
 
@@ -405,14 +425,11 @@ function chunkKey(cx, cz) {
 }
 
 
-/*
-Получить локальную координату блока.
-*/
-
 function localCoordinate(value) {
 
     let result =
-        value % CHUNK_SIZE;
+        value %
+        CHUNK_SIZE;
 
 
     if (result < 0) {
@@ -429,20 +446,62 @@ function localCoordinate(value) {
 
 
 /* =====================================================
-   ЗАГРУЗКА ЧАНКОВ
+   BLOCK KEY
+===================================================== */
+
+function blockKey(
+    x,
+    y,
+    z
+) {
+
+    return `${x},${y},${z}`;
+
+}
+
+
+/* =====================================================
+   BLOCK EXISTS
+===================================================== */
+
+function hasBlock(
+    x,
+    y,
+    z
+) {
+
+    return worldBlocks.has(
+
+        blockKey(
+            x,
+            y,
+            z
+        )
+
+    );
+
+}
+
+
+/* =====================================================
+   CHUNK LOADING
 ===================================================== */
 
 function updateChunks() {
 
     const playerChunkX =
-        worldToChunk(player.x);
+        worldToChunk(
+            player.x
+        );
 
 
     const playerChunkZ =
-        worldToChunk(player.z);
+        worldToChunk(
+            player.z
+        );
 
 
-    const needed =
+    const required =
         new Set();
 
 
@@ -470,17 +529,18 @@ function updateChunks() {
 
         ) {
 
-            /*
-            Круглая область
-            */
+            const distance =
+                Math.sqrt(
+
+                    dx * dx +
+                    dz * dz
+
+                );
+
 
             if (
-
-                dx * dx +
-                dz * dz >
-                RENDER_DISTANCE *
+                distance >
                 RENDER_DISTANCE
-
             ) {
 
                 continue;
@@ -489,18 +549,25 @@ function updateChunks() {
 
 
             const cx =
-                playerChunkX + dx;
+                playerChunkX +
+                dx;
 
 
             const cz =
-                playerChunkZ + dz;
+                playerChunkZ +
+                dz;
 
 
             const key =
-                chunkKey(cx, cz);
+                chunkKey(
+                    cx,
+                    cz
+                );
 
 
-            needed.add(key);
+            required.add(
+                key
+            );
 
 
             if (
@@ -521,7 +588,7 @@ function updateChunks() {
 
     /*
     -----------------------------------------------------
-    ВЫГРУЗКА ДАЛЬНИХ ЧАНКОВ
+    REMOVE FAR CHUNKS
     -----------------------------------------------------
     */
 
@@ -531,12 +598,11 @@ function updateChunks() {
     ) {
 
         if (
-            !needed.has(key)
+            !required.has(key)
         ) {
 
             unloadChunk(
-                chunk.cx,
-                chunk.cz
+                chunk
             );
 
         }
@@ -547,10 +613,13 @@ function updateChunks() {
 
 
 /* =====================================================
-   СОЗДАНИЕ ЧАНКА
+   CREATE CHUNK
 ===================================================== */
 
-function createChunk(cx, cz) {
+function createChunk(
+    cx,
+    cz
+) {
 
     const key =
         chunkKey(
@@ -568,17 +637,11 @@ function createChunk(cx, cz) {
     }
 
 
-    const chunk = {
-
-        cx,
-
-        cz,
-
-        blocks: new Map(),
-
-        meshes: []
-
-    };
+    const chunk =
+        new Chunk(
+            cx,
+            cz
+        );
 
 
     chunks.set(
@@ -591,14 +654,21 @@ function createChunk(cx, cz) {
         chunk
     );
 
+
+    rebuildChunk(
+        chunk
+    );
+
 }
 
 
 /* =====================================================
-   ГЕНЕРАЦИЯ ЧАНКА
+   GENERATE CHUNK
 ===================================================== */
 
-function generateChunk(chunk) {
+function generateChunk(
+    chunk
+) {
 
     const startX =
         chunk.cx *
@@ -631,11 +701,13 @@ function generateChunk(chunk) {
         ) {
 
             const x =
-                startX + lx;
+                startX +
+                lx;
 
 
             const z =
-                startZ + lz;
+                startZ +
+                lz;
 
 
             const height =
@@ -647,7 +719,7 @@ function generateChunk(chunk) {
 
             /*
             ------------------------------------------------
-            БЛОКИ ЗЕМЛИ
+            TERRAIN
             ------------------------------------------------
             */
 
@@ -691,7 +763,7 @@ function generateChunk(chunk) {
                 }
 
 
-                addBlockToChunk(
+                addBlock(
 
                     chunk,
 
@@ -710,7 +782,7 @@ function generateChunk(chunk) {
 
             /*
             ------------------------------------------------
-            ДЕРЕВЬЯ
+            TREE
             ------------------------------------------------
             */
 
@@ -739,44 +811,38 @@ function generateChunk(chunk) {
 
     }
 
-
-    /*
-    После генерации создаём mesh.
-    */
-
-    buildChunkMesh(
-        chunk
-    );
-
 }
 
 
 /* =====================================================
-   ВЫСОТА ТЕРРЕЙНА
+   TERRAIN
 ===================================================== */
 
-function getTerrainHeight(x, z) {
+function getTerrainHeight(
+    x,
+    z
+) {
 
-    const a =
+    const n1 =
         Math.sin(
             x * 0.08
         ) * 4;
 
 
-    const b =
+    const n2 =
         Math.cos(
             z * 0.07
         ) * 4;
 
 
-    const c =
+    const n3 =
         Math.sin(
             (x + z) *
             0.035
         ) * 7;
 
 
-    const d =
+    const n4 =
         Math.cos(
             (x - z) *
             0.02
@@ -787,10 +853,10 @@ function getTerrainHeight(x, z) {
         Math.floor(
 
             10 +
-            a +
-            b +
-            c +
-            d
+            n1 +
+            n2 +
+            n3 +
+            n4
 
         );
 
@@ -813,20 +879,13 @@ function getTerrainHeight(x, z) {
 
 
 /* =====================================================
-   ДЕРЕВЬЯ
+   TREE RANDOM
 ===================================================== */
 
-function shouldGenerateTree(x, z) {
-
-    /*
-    Детеминированное значение.
-
-    Это важно:
-
-    один и тот же мир
-    должен генерироваться
-    одинаково после перезагрузки.
-    */
+function shouldGenerateTree(
+    x,
+    z
+) {
 
     const value =
         Math.abs(
@@ -837,7 +896,6 @@ function shouldGenerateTree(x, z) {
                 z * 78.233
 
             ) *
-
             43758.5453
 
         );
@@ -845,7 +903,9 @@ function shouldGenerateTree(x, z) {
 
     const random =
         value -
-        Math.floor(value);
+        Math.floor(
+            value
+        );
 
 
     return random > 0.985;
@@ -854,7 +914,7 @@ function shouldGenerateTree(x, z) {
 
 
 /* =====================================================
-   СОЗДАНИЕ ДЕРЕВА
+   TREE
 ===================================================== */
 
 function generateTree(
@@ -864,20 +924,19 @@ function generateTree(
     z
 ) {
 
-    const height = 4;
+    const trunkHeight =
+        4;
 
-
-    /*
-    Ствол
-    */
 
     for (
         let i = 0;
-        i < height;
+
+        i < trunkHeight;
+
         i++
     ) {
 
-        addBlockToChunk(
+        addBlock(
 
             chunk,
 
@@ -894,25 +953,27 @@ function generateTree(
     }
 
 
-    /*
-    Листья
-    */
-
     for (
         let dx = -2;
+
         dx <= 2;
+
         dx++
     ) {
 
         for (
             let dz = -2;
+
             dz <= 2;
+
             dz++
         ) {
 
             for (
                 let dy = 0;
+
                 dy <= 2;
+
                 dy++
             ) {
 
@@ -925,13 +986,16 @@ function generateTree(
                     distance <= 3
                 ) {
 
-                    addBlockToChunk(
+                    addBlock(
 
                         chunk,
 
                         x + dx,
 
-                        y + height - 2 + dy,
+                        y +
+                        trunkHeight -
+                        2 +
+                        dy,
 
                         z + dz,
 
@@ -951,10 +1015,10 @@ function generateTree(
 
 
 /* =====================================================
-   ДОБАВЛЕНИЕ БЛОКА В ЧАНК
+   ADD BLOCK
 ===================================================== */
 
-function addBlockToChunk(
+function addBlock(
     chunk,
     x,
     y,
@@ -973,11 +1037,15 @@ function addBlockToChunk(
 
 
     const lx =
-        localCoordinate(x);
+        localCoordinate(
+            x
+        );
 
 
     const lz =
-        localCoordinate(z);
+        localCoordinate(
+            z
+        );
 
 
     const key =
@@ -993,22 +1061,22 @@ function addBlockToChunk(
     }
 
 
+    const data = {
+
+        x,
+
+        y,
+
+        z,
+
+        type
+
+    };
+
+
     chunk.blocks.set(
-
         key,
-
-        {
-
-            x,
-
-            y,
-
-            z,
-
-            type
-
-        }
-
+        data
     );
 
 
@@ -1020,17 +1088,7 @@ function addBlockToChunk(
             z
         ),
 
-        {
-
-            type,
-
-            chunkKey:
-                chunkKey(
-                    chunk.cx,
-                    chunk.cz
-                )
-
-        }
+        data
 
     );
 
@@ -1038,113 +1096,15 @@ function addBlockToChunk(
 
 
 /* =====================================================
-   ПОСТРОЕНИЕ MESH ЧАНКА
+   REMOVE CHUNK MESH
 ===================================================== */
 
-function buildChunkMesh(chunk) {
-
-    /*
-    В этой версии используем
-    face culling.
-
-    Невидимые грани блоков
-    не создаются.
-    */
-
-
-    for (
-        const block
-        of chunk.blocks.values()
-    ) {
-
-        createVisibleBlock(
-            chunk,
-            block
-        );
-
-    }
-
-}
-
-
-/* =====================================================
-   СОЗДАНИЕ ВИДИМОГО БЛОКА
-===================================================== */
-
-function createVisibleBlock(
-    chunk,
-    block
+function disposeChunkMesh(
+    chunk
 ) {
 
-    const {
-
-        x,
-
-        y,
-
-        z,
-
-        type
-
-    } = block;
-
-
-    const visibleFaces = {
-
-        px: !hasBlock(
-            x + 1,
-            y,
-            z
-        ),
-
-        nx: !hasBlock(
-            x - 1,
-            y,
-            z
-        ),
-
-        py: !hasBlock(
-            x,
-            y + 1,
-            z
-        ),
-
-        ny: !hasBlock(
-            x,
-            y - 1,
-            z
-        ),
-
-        pz: !hasBlock(
-            x,
-            y,
-            z + 1
-        ),
-
-        nz: !hasBlock(
-            x,
-            y,
-            z - 1
-        )
-
-    };
-
-
-    /*
-    Если блок полностью
-    окружён другими блоками,
-    он не нужен для рендера.
-    */
-
     if (
-
-        !visibleFaces.px &&
-        !visibleFaces.nx &&
-        !visibleFaces.py &&
-        !visibleFaces.ny &&
-        !visibleFaces.pz &&
-        !visibleFaces.nz
-
+        !chunk.mesh
     ) {
 
         return;
@@ -1152,33 +1112,332 @@ function createVisibleBlock(
     }
 
 
+    scene.remove(
+        chunk.mesh
+    );
+
+
+    if (
+        chunk.mesh.geometry
+    ) {
+
+        chunk.mesh.geometry.dispose();
+
+    }
+
+
+    if (
+        chunk.mesh.material
+    ) {
+
+        chunk.mesh.material.dispose();
+
+    }
+
+
+    chunk.mesh =
+        null;
+
+}
+
+
+/* =====================================================
+   REBUILD CHUNK
+===================================================== */
+
+function rebuildChunk(
+    chunk
+) {
+
+    disposeChunkMesh(
+        chunk
+    );
+
+
     /*
-    Пока создаём cube.
-    Следующим этапом заменим
-    это на настоящий greedy meshing.
+    Общие массивы
+    */
+
+    const positions = [];
+
+    const normals = [];
+
+    const colors = [];
+
+    const indices = [];
+
+
+    let vertexCount = 0;
+
+
+    /*
+    -----------------------------------------------------
+    BLOCKS
+    -----------------------------------------------------
+    */
+
+    for (
+        const block
+        of chunk.blocks.values()
+    ) {
+
+        /*
+        Проверяем каждую сторону.
+        */
+
+        if (
+            !hasBlock(
+                block.x + 1,
+                block.y,
+                block.z
+            )
+        ) {
+
+            addFace(
+                positions,
+                normals,
+                colors,
+                indices,
+
+                block,
+
+                "px",
+
+                vertexCount
+            );
+
+            vertexCount += 4;
+
+        }
+
+
+        if (
+            !hasBlock(
+                block.x - 1,
+                block.y,
+                block.z
+            )
+        ) {
+
+            addFace(
+                positions,
+                normals,
+                colors,
+                indices,
+
+                block,
+
+                "nx",
+
+                vertexCount
+            );
+
+            vertexCount += 4;
+
+        }
+
+
+        if (
+            !hasBlock(
+                block.x,
+                block.y + 1,
+                block.z
+            )
+        ) {
+
+            addFace(
+                positions,
+                normals,
+                colors,
+                indices,
+
+                block,
+
+                "py",
+
+                vertexCount
+            );
+
+            vertexCount += 4;
+
+        }
+
+
+        if (
+            !hasBlock(
+                block.x,
+                block.y - 1,
+                block.z
+            )
+        ) {
+
+            addFace(
+                positions,
+                normals,
+                colors,
+                indices,
+
+                block,
+
+                "ny",
+
+                vertexCount
+            );
+
+            vertexCount += 4;
+
+        }
+
+
+        if (
+            !hasBlock(
+                block.x,
+                block.y,
+                block.z + 1
+            )
+        ) {
+
+            addFace(
+                positions,
+                normals,
+                colors,
+                indices,
+
+                block,
+
+                "pz",
+
+                vertexCount
+            );
+
+            vertexCount += 4;
+
+        }
+
+
+        if (
+            !hasBlock(
+                block.x,
+                block.y,
+                block.z - 1
+            )
+        ) {
+
+            addFace(
+                positions,
+                normals,
+                colors,
+                indices,
+
+                block,
+
+                "nz",
+
+                vertexCount
+            );
+
+            vertexCount += 4;
+
+        }
+
+    }
+
+
+    /*
+    Если ничего нет
+    */
+
+    if (
+        positions.length === 0
+    ) {
+
+        chunk.mesh =
+            null;
+
+        return;
+
+    }
+
+
+    /*
+    -----------------------------------------------------
+    BUFFER GEOMETRY
+    -----------------------------------------------------
     */
 
     const geometry =
-        new THREE.BoxGeometry(
-            1,
-            1,
-            1
-        );
+        new THREE.BufferGeometry();
 
 
-    const color =
-        BLOCKS[type]
-            ? BLOCKS[type].color
-            : 0xffffff;
+    geometry.setAttribute(
 
+        "position",
+
+        new THREE.Float32BufferAttribute(
+
+            positions,
+
+            3
+
+        )
+
+    );
+
+
+    geometry.setAttribute(
+
+        "normal",
+
+        new THREE.Float32BufferAttribute(
+
+            normals,
+
+            3
+
+        )
+
+    );
+
+
+    geometry.setAttribute(
+
+        "color",
+
+        new THREE.Float32BufferAttribute(
+
+            colors,
+
+            3
+
+        )
+
+    );
+
+
+    geometry.setIndex(
+        indices
+    );
+
+
+    /*
+    -----------------------------------------------------
+    MATERIAL
+    -----------------------------------------------------
+    */
 
     const material =
         new THREE.MeshLambertMaterial({
 
-            color
+            vertexColors: true
 
         });
 
+
+    /*
+    -----------------------------------------------------
+    MESH
+    -----------------------------------------------------
+    */
 
     const mesh =
         new THREE.Mesh(
@@ -1190,26 +1449,15 @@ function createVisibleBlock(
         );
 
 
-    mesh.position.set(
+    mesh.userData.chunk = {
 
-        x + 0.5,
+        cx:
+            chunk.cx,
 
-        y + 0.5,
+        cz:
+            chunk.cz
 
-        z + 0.5
-
-    );
-
-
-    mesh.userData.block = true;
-
-    mesh.userData.x = x;
-
-    mesh.userData.y = y;
-
-    mesh.userData.z = z;
-
-    mesh.userData.type = type;
+    };
 
 
     scene.add(
@@ -1217,78 +1465,395 @@ function createVisibleBlock(
     );
 
 
-    chunk.meshes.push(
-        mesh
-    );
+    chunk.mesh =
+        mesh;
+
+
+    chunk.dirty =
+        false;
 
 }
 
 
 /* =====================================================
-   ПРОВЕРКА БЛОКА
+   ADD FACE
 ===================================================== */
 
-function hasBlock(x, y, z) {
+function addFace(
+    positions,
+    normals,
+    colors,
+    indices,
 
-    return worldBlocks.has(
+    block,
 
-        blockKey(
-            x,
-            y,
-            z
-        )
+    side,
 
-    );
+    offset
+) {
 
-}
+    const x =
+        block.x;
 
 
-/* =====================================================
-   ВЫГРУЗКА ЧАНКА
-===================================================== */
+    const y =
+        block.y;
 
-function unloadChunk(cx, cz) {
 
-    const key =
-        chunkKey(
-            cx,
-            cz
+    const z =
+        block.z;
+
+
+    const color =
+        getBlockColor(
+            block.type,
+            side
         );
 
 
-    const chunk =
-        chunks.get(key);
+    let vertices;
+
+    let normal;
 
 
-    if (!chunk) {
+    /*
+    -----------------------------------------------------
+    +X
+    -----------------------------------------------------
+    */
 
-        return;
+    if (
+        side === "px"
+    ) {
+
+        vertices = [
+
+            x + 1, y, z,
+
+            x + 1, y + 1, z,
+
+            x + 1, y + 1, z + 1,
+
+            x + 1, y, z + 1
+
+        ];
+
+
+        normal = [
+            1,
+            0,
+            0
+        ];
 
     }
 
 
     /*
-    Удаляем mesh.
+    -----------------------------------------------------
+    -X
+    -----------------------------------------------------
+    */
+
+    else if (
+        side === "nx"
+    ) {
+
+        vertices = [
+
+            x, y, z + 1,
+
+            x, y + 1, z + 1,
+
+            x, y + 1, z,
+
+            x, y, z
+
+        ];
+
+
+        normal = [
+            -1,
+            0,
+            0
+        ];
+
+    }
+
+
+    /*
+    -----------------------------------------------------
+    +Y
+    -----------------------------------------------------
+    */
+
+    else if (
+        side === "py"
+    ) {
+
+        vertices = [
+
+            x, y + 1, z,
+
+            x, y + 1, z + 1,
+
+            x + 1, y + 1, z + 1,
+
+            x + 1, y + 1, z
+
+        ];
+
+
+        normal = [
+            0,
+            1,
+            0
+        ];
+
+    }
+
+
+    /*
+    -----------------------------------------------------
+    -Y
+    -----------------------------------------------------
+    */
+
+    else if (
+        side === "ny"
+    ) {
+
+        vertices = [
+
+            x, y, z + 1,
+
+            x, y, z,
+
+            x + 1, y, z,
+
+            x + 1, y, z + 1
+
+        ];
+
+
+        normal = [
+            0,
+            -1,
+            0
+        ];
+
+    }
+
+
+    /*
+    -----------------------------------------------------
+    +Z
+    -----------------------------------------------------
+    */
+
+    else if (
+        side === "pz"
+    ) {
+
+        vertices = [
+
+            x + 1, y, z + 1,
+
+            x + 1, y + 1, z + 1,
+
+            x, y + 1, z + 1,
+
+            x, y, z + 1
+
+        ];
+
+
+        normal = [
+            0,
+            0,
+            1
+        ];
+
+    }
+
+
+    /*
+    -----------------------------------------------------
+    -Z
+    -----------------------------------------------------
+    */
+
+    else {
+
+        vertices = [
+
+            x, y, z,
+
+            x, y + 1, z,
+
+            x + 1, y + 1, z,
+
+            x + 1, y, z
+
+        ];
+
+
+        normal = [
+            0,
+            0,
+            -1
+        ];
+
+    }
+
+
+    /*
+    -----------------------------------------------------
+    POSITIONS
+    -----------------------------------------------------
     */
 
     for (
-        const mesh
-        of chunk.meshes
+        let i = 0;
+
+        i < vertices.length;
+
+        i++
     ) {
 
-        scene.remove(
-            mesh
+        positions.push(
+            vertices[i]
         );
 
+    }
 
-        mesh.geometry.dispose();
 
+    /*
+    -----------------------------------------------------
+    NORMALS
+    -----------------------------------------------------
+    */
+
+    for (
+        let i = 0;
+
+        i < 4;
+
+        i++
+    ) {
+
+        normals.push(
+
+            normal[0],
+
+            normal[1],
+
+            normal[2]
+
+        );
+
+    }
+
+
+    /*
+    -----------------------------------------------------
+    COLORS
+    -----------------------------------------------------
+    */
+
+    for (
+        let i = 0;
+
+        i < 4;
+
+        i++
+    ) {
+
+        colors.push(
+
+            color.r,
+
+            color.g,
+
+            color.b
+
+        );
+
+    }
+
+
+    /*
+    -----------------------------------------------------
+    INDICES
+    -----------------------------------------------------
+    */
+
+    indices.push(
+
+        offset,
+
+        offset + 1,
+
+        offset + 2,
+
+        offset,
+
+        offset + 2,
+
+        offset + 3
+
+    );
+
+}
+
+
+/* =====================================================
+   BLOCK COLOR
+===================================================== */
+
+function getBlockColor(
+    type,
+    side
+) {
+
+    let color;
+
+
+    /*
+    Grass
+    */
+
+    if (
+        type === "grass"
+    ) {
 
         if (
-            mesh.material
+            side === "py"
         ) {
 
-            mesh.material.dispose();
+            color =
+                new THREE.Color(
+                    0x59b83f
+                );
+
+        }
+
+        else if (
+            side === "ny"
+        ) {
+
+            color =
+                new THREE.Color(
+                    0x70451f
+                );
+
+        }
+
+        else {
+
+            color =
+                new THREE.Color(
+                    0x65a94c
+                );
 
         }
 
@@ -1296,7 +1861,84 @@ function unloadChunk(cx, cz) {
 
 
     /*
-    Удаляем блоки.
+    Остальные блоки
+    */
+
+    else {
+
+        color =
+            new THREE.Color(
+
+                BLOCKS[type]
+                    ? BLOCKS[type].color
+                    : 0xffffff
+
+            );
+
+    }
+
+
+    /*
+    Простое освещение сторон.
+
+    Верх светлее.
+    Низ темнее.
+    */
+
+    if (
+        side === "py"
+    ) {
+
+        color.multiplyScalar(
+            1.08
+        );
+
+    }
+
+
+    if (
+        side === "ny"
+    ) {
+
+        color.multiplyScalar(
+            0.65
+        );
+
+    }
+
+
+    if (
+        side === "px" ||
+        side === "nx"
+    ) {
+
+        color.multiplyScalar(
+            0.9
+        );
+
+    }
+
+
+    return color;
+
+}
+
+
+/* =====================================================
+   UNLOAD CHUNK
+===================================================== */
+
+function unloadChunk(
+    chunk
+) {
+
+    disposeChunkMesh(
+        chunk
+    );
+
+
+    /*
+    Удаляем блоки
     */
 
     for (
@@ -1322,7 +1964,15 @@ function unloadChunk(cx, cz) {
 
 
     chunks.delete(
-        key
+
+        chunkKey(
+
+            chunk.cx,
+
+            chunk.cz
+
+        )
+
     );
 
 }
@@ -1333,6 +1983,52 @@ function unloadChunk(cx, cz) {
 ===================================================== */
 
 function spawnPlayer() {
+
+    /*
+    Загружаем стартовый чанк
+    */
+
+    const cx =
+        worldToChunk(
+            0
+        );
+
+
+    const cz =
+        worldToChunk(
+            0
+        );
+
+
+    /*
+    Сначала создаём стартовый
+    набор чанков.
+    */
+
+    for (
+        let x = -1;
+        x <= 1;
+        x++
+    ) {
+
+        for (
+            let z = -1;
+            z <= 1;
+            z++
+        ) {
+
+            createChunk(
+
+                cx + x,
+
+                cz + z
+
+            );
+
+        }
+
+    }
+
 
     const ground =
         getTerrainHeight(
@@ -1359,7 +2055,7 @@ function spawnPlayer() {
 
 
 /* =====================================================
-   УПРАВЛЕНИЕ
+   INPUT
 ===================================================== */
 
 function setupControls() {
@@ -1442,17 +2138,15 @@ function setupControls() {
     );
 
 
-    /*
-    Кнопка игры
-    */
-
     const playButton =
         document.getElementById(
             "playButton"
         );
 
 
-    if (playButton) {
+    if (
+        playButton
+    ) {
 
         playButton.addEventListener(
 
@@ -1464,10 +2158,6 @@ function setupControls() {
 
     }
 
-
-    /*
-    Pointer Lock
-    */
 
     renderer.domElement.addEventListener(
 
@@ -1525,11 +2215,13 @@ function setupControls() {
 
 
             yaw -=
+
                 event.movementX *
                 sensitivity;
 
 
             pitch -=
+
                 event.movementY *
                 sensitivity;
 
@@ -1558,10 +2250,6 @@ function setupControls() {
 
     );
 
-
-    /*
-    Клики
-    */
 
     renderer.domElement.addEventListener(
 
@@ -1613,10 +2301,6 @@ function setupControls() {
     );
 
 
-    /*
-    Слоты
-    */
-
     document.querySelectorAll(
         ".slot"
     ).forEach(
@@ -1661,7 +2345,7 @@ function setupControls() {
 
 
 /* =====================================================
-   СТАРТ
+   START GAME
 ===================================================== */
 
 function startGame() {
@@ -1672,7 +2356,9 @@ function startGame() {
         );
 
 
-    if (screen) {
+    if (
+        screen
+    ) {
 
         screen.style.display =
             "none";
@@ -1707,10 +2393,12 @@ function lockPointer() {
 
 
 /* =====================================================
-   ВЫБОР СЛОТА
+   SELECT SLOT
 ===================================================== */
 
-function selectSlot(number) {
+function selectSlot(
+    number
+) {
 
     const slots =
         document.querySelectorAll(
@@ -1764,7 +2452,9 @@ function selectSlot(number) {
         );
 
 
-    if (label) {
+    if (
+        label
+    ) {
 
         label.textContent =
             BLOCKS[
@@ -1777,10 +2467,12 @@ function selectSlot(number) {
 
 
 /* =====================================================
-   ИГРОК
+   PLAYER UPDATE
 ===================================================== */
 
-function updatePlayer(delta) {
+function updatePlayer(
+    delta
+) {
 
     if (
         !pointerLocked
@@ -1872,45 +2564,40 @@ function updatePlayer(delta) {
             );
 
 
-        const moveX =
+        const dx =
 
             (
 
-                right *
-                    cos +
+                right * cos +
 
-                forward *
-                    sin
+                forward * sin
 
             ) * speed;
 
 
-        const moveZ =
+        const dz =
 
             (
 
-                forward *
-                    cos -
+                forward * cos -
 
-                right *
-                    sin
+                right * sin
 
             ) * speed;
 
 
         movePlayer(
-
-            moveX,
-
-            moveZ
-
+            dx,
+            dz
         );
 
     }
 
 
     /*
-    Гравитация
+    -----------------------------------------------------
+    GRAVITY
+    -----------------------------------------------------
     */
 
     player.velocityY -=
@@ -1926,28 +2613,31 @@ function updatePlayer(delta) {
 
 
     if (
-        vertical <= 0
+        vertical > 0
     ) {
 
         if (
-            isGroundBelow()
+            !collides(
+
+                player.x,
+
+                player.y +
+                    vertical,
+
+                player.z
+
+            )
         ) {
 
-            player.grounded =
-                true;
-
-            player.velocityY =
-                0;
+            player.y +=
+                vertical;
 
         }
 
         else {
 
-            player.grounded =
-                false;
-
-            player.y +=
-                vertical;
+            player.velocityY =
+                0;
 
         }
 
@@ -1955,38 +2645,59 @@ function updatePlayer(delta) {
 
     else {
 
-        player.grounded =
-            false;
+        if (
+            !collides(
 
-        player.y +=
-            vertical;
+                player.x,
+
+                player.y +
+                    vertical,
+
+                player.z
+
+            )
+        ) {
+
+            player.y +=
+                vertical;
+
+            player.grounded =
+                false;
+
+        }
+
+        else {
+
+            player.velocityY =
+                0;
+
+            player.grounded =
+                true;
+
+        }
 
     }
 
 
     /*
-    Проверка земли
+    -----------------------------------------------------
+    CHUNK UPDATE
+    -----------------------------------------------------
     */
 
+    chunkUpdateTimer +=
+        delta;
+
+
     if (
-        isGroundBelow()
+        chunkUpdateTimer >
+        0.5
     ) {
 
-        player.grounded =
-            true;
+        updateChunks();
 
-        player.velocityY =
+        chunkUpdateTimer =
             0;
-
-
-        const blockY =
-            Math.floor(
-                player.y
-            );
-
-
-        player.y =
-            blockY + 0.001;
 
     }
 
@@ -1997,7 +2708,7 @@ function updatePlayer(delta) {
 
 
 /* =====================================================
-   ДВИЖЕНИЕ
+   MOVE PLAYER
 ===================================================== */
 
 function movePlayer(
@@ -2011,9 +2722,13 @@ function movePlayer(
 
     if (
         !collides(
+
             newX,
+
             player.y,
+
             player.z
+
         )
     ) {
 
@@ -2029,9 +2744,13 @@ function movePlayer(
 
     if (
         !collides(
+
             player.x,
+
             player.y,
+
             newZ
+
         )
     ) {
 
@@ -2044,7 +2763,7 @@ function movePlayer(
 
 
 /* =====================================================
-   КОЛЛИЗИЯ
+   COLLISION
 ===================================================== */
 
 function collides(
@@ -2133,17 +2852,11 @@ function collides(
             ) {
 
                 if (
-
                     hasBlock(
-
                         bx,
-
                         by,
-
                         bz
-
                     )
-
                 ) {
 
                     return true;
@@ -2163,49 +2876,7 @@ function collides(
 
 
 /* =====================================================
-   ЗЕМЛЯ
-===================================================== */
-
-function isGroundBelow() {
-
-    const feet =
-        player.y -
-        0.05;
-
-
-    const bx =
-        Math.floor(
-            player.x
-        );
-
-
-    const by =
-        Math.floor(
-            feet
-        );
-
-
-    const bz =
-        Math.floor(
-            player.z
-        );
-
-
-    return hasBlock(
-
-        bx,
-
-        by,
-
-        bz
-
-    );
-
-}
-
-
-/* =====================================================
-   КАМЕРА
+   CAMERA
 ===================================================== */
 
 function updateCamera() {
@@ -2234,7 +2905,7 @@ function updateCamera() {
 
 
 /* =====================================================
-   TARGET BLOCK
+   RAYCAST
 ===================================================== */
 
 function getTargetBlock() {
@@ -2254,18 +2925,22 @@ function getTargetBlock() {
     const meshes = [];
 
 
+    /*
+    Теперь raycast идёт
+    по чанковым mesh.
+    */
+
     for (
         const chunk
         of chunks.values()
     ) {
 
-        for (
-            const mesh
-            of chunk.meshes
+        if (
+            chunk.mesh
         ) {
 
             meshes.push(
-                mesh
+                chunk.mesh
             );
 
         }
@@ -2306,42 +2981,110 @@ function getTargetBlock() {
     }
 
 
-    return hit;
+    /*
+    Нам нужно вычислить,
+    какой блок был выбран.
+
+    Точка попадания
+    немного смещена внутрь/наружу
+    относительно поверхности.
+    */
+
+    const point =
+        hit.point;
+
+
+    const normal =
+        hit.face.normal;
+
+
+    const px =
+        point.x -
+        normal.x *
+        0.001;
+
+
+    const py =
+        point.y -
+        normal.y *
+        0.001;
+
+
+    const pz =
+        point.z -
+        normal.z *
+        0.001;
+
+
+    const x =
+        Math.floor(
+            px
+        );
+
+
+    const y =
+        Math.floor(
+            py
+        );
+
+
+    const z =
+        Math.floor(
+            pz
+        );
+
+
+    if (
+        !hasBlock(
+            x,
+            y,
+            z
+        )
+    ) {
+
+        return null;
+
+    }
+
+
+    return {
+
+        hit,
+
+        x,
+
+        y,
+
+        z,
+
+        normal
+
+    };
 
 }
 
 
 /* =====================================================
-   ЛОМАНИЕ
+   BREAK
 ===================================================== */
 
 function breakBlock() {
 
-    const hit =
+    const target =
         getTargetBlock();
 
 
-    if (!hit) {
+    if (
+        !target
+    ) {
 
         return;
 
     }
 
 
-    const x =
-        hit.object.userData.x;
-
-
-    const y =
-        hit.object.userData.y;
-
-
-    const z =
-        hit.object.userData.z;
-
-
     if (
-        y <= 0
+        target.y <= 0
     ) {
 
         return;
@@ -2351,11 +3094,11 @@ function breakBlock() {
 
     setBlock(
 
-        x,
+        target.x,
 
-        y,
+        target.y,
 
-        z,
+        target.z,
 
         null
 
@@ -2365,39 +3108,37 @@ function breakBlock() {
 
 
 /* =====================================================
-   УСТАНОВКА
+   PLACE
 ===================================================== */
 
 function placeBlock() {
 
-    const hit =
+    const target =
         getTargetBlock();
 
 
-    if (!hit) {
+    if (
+        !target
+    ) {
 
         return;
 
     }
 
 
-    const normal =
-        hit.face.normal;
-
-
     const x =
-        hit.object.userData.x +
-        normal.x;
+        target.x +
+        target.normal.x;
 
 
     const y =
-        hit.object.userData.y +
-        normal.y;
+        target.y +
+        target.normal.y;
 
 
     const z =
-        hit.object.userData.z +
-        normal.z;
+        target.z +
+        target.normal.z;
 
 
     if (
@@ -2414,8 +3155,7 @@ function placeBlock() {
 
 
     /*
-    Не разрешаем поставить
-    блок внутрь игрока.
+    Не ставим блок внутрь игрока.
     */
 
     if (
@@ -2442,6 +3182,22 @@ function placeBlock() {
     }
 
 
+    const chunk =
+        getChunkForBlock(
+            x,
+            z
+        );
+
+
+    if (
+        !chunk
+    ) {
+
+        return;
+
+    }
+
+
     setBlock(
 
         x,
@@ -2458,14 +3214,12 @@ function placeBlock() {
 
 
 /* =====================================================
-   ИЗМЕНЕНИЕ БЛОКА
+   GET CHUNK
 ===================================================== */
 
-function setBlock(
+function getChunkForBlock(
     x,
-    y,
-    z,
-    type
+    z
 ) {
 
     const cx =
@@ -2480,48 +3234,64 @@ function setBlock(
         );
 
 
-    const key =
+    return chunks.get(
+
         chunkKey(
             cx,
             cz
+        )
+
+    );
+
+}
+
+
+/* =====================================================
+   SET BLOCK
+===================================================== */
+
+function setBlock(
+    x,
+    y,
+    z,
+    type
+) {
+
+    const chunk =
+        getChunkForBlock(
+            x,
+            z
         );
 
 
-    let chunk =
-        chunks.get(key);
-
-
-    /*
-    Если чанк не загружен,
-    ничего не делаем.
-    */
-
-    if (!chunk) {
+    if (
+        !chunk
+    ) {
 
         return;
 
     }
 
 
-    const localX =
+    const lx =
         localCoordinate(
             x
         );
 
 
-    const localZ =
+    const lz =
         localCoordinate(
             z
         );
 
 
-    const blockKeyLocal =
-        `${localX},${y},${localZ}`;
+    const localKey =
+        `${lx},${y},${lz}`;
 
 
     /*
     -----------------------------------------------------
-    УДАЛЕНИЕ
+    REMOVE
     -----------------------------------------------------
     */
 
@@ -2530,7 +3300,7 @@ function setBlock(
     ) {
 
         chunk.blocks.delete(
-            blockKeyLocal
+            localKey
         );
 
 
@@ -2549,27 +3319,30 @@ function setBlock(
 
     /*
     -----------------------------------------------------
-    ДОБАВЛЕНИЕ
+    ADD
     -----------------------------------------------------
     */
 
     else {
 
+        const data = {
+
+            x,
+
+            y,
+
+            z,
+
+            type
+
+        };
+
+
         chunk.blocks.set(
 
-            blockKeyLocal,
+            localKey,
 
-            {
-
-                x,
-
-                y,
-
-                z,
-
-                type
-
-            }
+            data
 
         );
 
@@ -2582,14 +3355,7 @@ function setBlock(
                 z
             ),
 
-            {
-
-                type,
-
-                chunkKey:
-                    key
-
-            }
+            data
 
         );
 
@@ -2597,7 +3363,9 @@ function setBlock(
 
 
     /*
-    Перестраиваем чанк
+    -----------------------------------------------------
+    REBUILD
+    -----------------------------------------------------
     */
 
     rebuildChunk(
@@ -2606,12 +3374,13 @@ function setBlock(
 
 
     /*
-    Также соседние чанки,
-    если блок находится
-    на границе.
+    Если изменён блок
+    на границе чанка,
+    сосед тоже должен
+    перестроиться.
     */
 
-    rebuildNeighbors(
+    rebuildNeighborChunks(
         x,
         z
     );
@@ -2620,45 +3389,10 @@ function setBlock(
 
 
 /* =====================================================
-   ПЕРЕСТРОЙКА ЧАНКА
+   NEIGHBOR CHUNKS
 ===================================================== */
 
-function rebuildChunk(chunk) {
-
-    for (
-        const mesh
-        of chunk.meshes
-    ) {
-
-        scene.remove(
-            mesh
-        );
-
-
-        mesh.geometry.dispose();
-
-
-        mesh.material.dispose();
-
-    }
-
-
-    chunk.meshes =
-        [];
-
-
-    buildChunkMesh(
-        chunk
-    );
-
-}
-
-
-/* =====================================================
-   СОСЕДНИЕ ЧАНКИ
-===================================================== */
-
-function rebuildNeighbors(
+function rebuildNeighborChunks(
     x,
     z
 ) {
@@ -2679,12 +3413,9 @@ function rebuildNeighbors(
         lx === 0
     ) {
 
-        rebuildChunkByWorld(
-
+        rebuildChunkAt(
             x - 1,
-
             z
-
         );
 
     }
@@ -2695,12 +3426,9 @@ function rebuildNeighbors(
         CHUNK_SIZE - 1
     ) {
 
-        rebuildChunkByWorld(
-
+        rebuildChunkAt(
             x + 1,
-
             z
-
         );
 
     }
@@ -2710,12 +3438,9 @@ function rebuildNeighbors(
         lz === 0
     ) {
 
-        rebuildChunkByWorld(
-
+        rebuildChunkAt(
             x,
-
             z - 1
-
         );
 
     }
@@ -2726,12 +3451,9 @@ function rebuildNeighbors(
         CHUNK_SIZE - 1
     ) {
 
-        rebuildChunkByWorld(
-
+        rebuildChunkAt(
             x,
-
             z + 1
-
         );
 
     }
@@ -2740,10 +3462,10 @@ function rebuildNeighbors(
 
 
 /* =====================================================
-   REBUILD ПО МИРОВЫМ КООРДИНАТАМ
+   REBUILD CHUNK AT
 ===================================================== */
 
-function rebuildChunkByWorld(
+function rebuildChunkAt(
     x,
     z
 ) {
@@ -2785,25 +3507,10 @@ function rebuildChunkByWorld(
 
 
 /* =====================================================
-   BLOCK KEY
+   HUD
 ===================================================== */
 
-function blockKey(
-    x,
-    y,
-    z
-) {
-
-    return `${x},${y},${z}`;
-
-}
-
-
-/* =====================================================
-   КООРДИНАТЫ HUD
-===================================================== */
-
-function updateCoordinates() {
+function updateHUD() {
 
     const x =
         document.getElementById(
@@ -2823,7 +3530,9 @@ function updateCoordinates() {
         );
 
 
-    if (x) {
+    if (
+        x
+    ) {
 
         x.textContent =
             Math.floor(
@@ -2833,7 +3542,9 @@ function updateCoordinates() {
     }
 
 
-    if (y) {
+    if (
+        y
+    ) {
 
         y.textContent =
             Math.floor(
@@ -2843,7 +3554,9 @@ function updateCoordinates() {
     }
 
 
-    if (z) {
+    if (
+        z
+    ) {
 
         z.textContent =
             Math.floor(
@@ -2888,32 +3601,13 @@ function animate() {
         );
 
 
-    /*
-    Обновляем чанки.
-    */
-
-    updateChunks();
-
-
-    /*
-    Игрок.
-    */
-
     updatePlayer(
         delta
     );
 
 
-    /*
-    HUD.
-    */
+    updateHUD();
 
-    updateCoordinates();
-
-
-    /*
-    Рендер.
-    */
 
     renderer.render(
 

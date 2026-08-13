@@ -1,71 +1,172 @@
 /*
 =========================================================
- MYCRAFT WEB
- Первый 3D voxel-мир
+ MYCRAFT WEB ENGINE
+ CHUNK SYSTEM v2
+=========================================================
+
+ Мир:
+   Chunk = 16 x 16 блоков
+   Высота мира = 64
+
+ Система:
+   - динамическая загрузка чанков
+   - выгрузка дальних чанков
+   - генерация terrain
+   - деревья
+   - блоки
+   - игрок
+   - физика
+   - raycast
 =========================================================
 */
 
-const game = document.getElementById("game");
+
+/* =====================================================
+   НАСТРОЙКИ
+===================================================== */
+
+const CHUNK_SIZE = 16;
+
+const WORLD_HEIGHT = 64;
+
+const RENDER_DISTANCE = 4;
+
+const BLOCK_REACH = 6;
+
+const GRAVITY = 22;
+
+const PLAYER_SPEED = 5.5;
+
+const JUMP_POWER = 8;
+
+
+/* =====================================================
+   THREE.JS
+===================================================== */
 
 let scene;
+
 let camera;
+
 let renderer;
 
-let world = new Map();
 
-let player = {
+/* =====================================================
+   СОСТОЯНИЕ ИГРЫ
+===================================================== */
+
+const chunks = new Map();
+
+const worldBlocks = new Map();
+
+let generatedChunks = new Set();
+
+
+/* =====================================================
+   ИГРОК
+===================================================== */
+
+const player = {
+
     x: 0,
-    y: 4,
+
+    y: 20,
+
     z: 0,
 
     velocityY: 0,
 
     height: 1.8,
+
     radius: 0.3,
 
-    speed: 5.5,
-    jumpPower: 8,
-
     grounded: false
+
 };
 
-let keys = {};
+
+/* =====================================================
+   УПРАВЛЕНИЕ
+===================================================== */
+
+const keys = {};
 
 let yaw = 0;
+
 let pitch = 0;
 
 let pointerLocked = false;
 
+
+/* =====================================================
+   ВЫБРАННЫЙ БЛОК
+===================================================== */
+
 let selectedBlock = "grass";
 
+
+/* =====================================================
+   ТИПЫ БЛОКОВ
+===================================================== */
+
 const BLOCKS = {
+
     grass: {
+
         name: "Трава",
-        top: 0x59b83f,
-        side: 0x65a94c,
-        bottom: 0x8b5a32
+
+        color: 0x59b83f
+
     },
 
     dirt: {
+
         name: "Земля",
+
         color: 0x8b5a32
+
     },
 
     stone: {
+
         name: "Камень",
+
         color: 0x777777
+
     },
 
     wood: {
+
         name: "Дерево",
+
         color: 0x8b5a2b
+
     },
 
     leaves: {
+
         name: "Листья",
+
         color: 0x3e9b35
+
     }
+
 };
+
+
+/* =====================================================
+   ТЕКУЩЕЕ ВРЕМЯ
+===================================================== */
+
+let lastTime = performance.now();
+
+
+/* =====================================================
+   RAYCAST
+===================================================== */
+
+const raycaster = new THREE.Raycaster();
+
 
 /* =====================================================
    ИНИЦИАЛИЗАЦИЯ
@@ -73,267 +174,582 @@ const BLOCKS = {
 
 function init() {
 
-    scene = new THREE.Scene();
+    const game =
+        document.getElementById("game");
 
-    scene.background = new THREE.Color(0x87ceeb);
 
-    scene.fog = new THREE.Fog(
-        0x87ceeb,
-        20,
-        100
-    );
+    /*
+    -----------------------------------------------------
+    SCENE
+    -----------------------------------------------------
+    */
 
-    camera = new THREE.PerspectiveCamera(
-        75,
-        window.innerWidth / window.innerHeight,
-        0.05,
-        300
-    );
+    scene =
+        new THREE.Scene();
 
-    camera.rotation.order = "YXZ";
 
-    renderer = new THREE.WebGLRenderer({
-        antialias: false,
-        powerPreference: "high-performance"
-    });
+    scene.background =
+        new THREE.Color(
+            0x87ceeb
+        );
+
+
+    scene.fog =
+        new THREE.Fog(
+            0x87ceeb,
+            30,
+            CHUNK_SIZE *
+            (RENDER_DISTANCE + 1)
+        );
+
+
+    /*
+    -----------------------------------------------------
+    CAMERA
+    -----------------------------------------------------
+    */
+
+    camera =
+        new THREE.PerspectiveCamera(
+
+            75,
+
+            window.innerWidth /
+            window.innerHeight,
+
+            0.05,
+
+            300
+
+        );
+
+
+    camera.rotation.order =
+        "YXZ";
+
+
+    /*
+    -----------------------------------------------------
+    RENDERER
+    -----------------------------------------------------
+    */
+
+    renderer =
+        new THREE.WebGLRenderer({
+
+            antialias: false,
+
+            powerPreference:
+                "high-performance"
+
+        });
+
 
     renderer.setPixelRatio(
-        Math.min(window.devicePixelRatio, 1.5)
+
+        Math.min(
+
+            window.devicePixelRatio,
+
+            1.5
+
+        )
+
     );
+
 
     renderer.setSize(
+
         window.innerWidth,
+
         window.innerHeight
+
     );
 
-    renderer.shadowMap.enabled = false;
 
-    game.appendChild(renderer.domElement);
+    game.appendChild(
+        renderer.domElement
+    );
 
-    createLights();
 
-    generateWorld();
+    /*
+    -----------------------------------------------------
+    LIGHT
+    -----------------------------------------------------
+    */
 
-    createPlayer();
+    createLighting();
+
+
+    /*
+    -----------------------------------------------------
+    CONTROLS
+    -----------------------------------------------------
+    */
 
     setupControls();
 
+
+    /*
+    -----------------------------------------------------
+    PLAYER
+    -----------------------------------------------------
+    */
+
+    spawnPlayer();
+
+
+    /*
+    -----------------------------------------------------
+    RESIZE
+    -----------------------------------------------------
+    */
+
     window.addEventListener(
+
         "resize",
-        onResize
+
+        resize
+
     );
+
+
+    /*
+    -----------------------------------------------------
+    START
+    -----------------------------------------------------
+    */
 
     animate();
 
-    setTimeout(() => {
-
-        document.getElementById("loading").style.display = "none";
-
-    }, 500);
 }
+
 
 /* =====================================================
    ОСВЕЩЕНИЕ
 ===================================================== */
 
-function createLights() {
+function createLighting() {
 
-    const ambient = new THREE.HemisphereLight(
-        0xffffff,
-        0x6b6b6b,
-        1.5
+    const ambient =
+        new THREE.HemisphereLight(
+
+            0xffffff,
+
+            0x555555,
+
+            1.6
+
+        );
+
+
+    scene.add(
+        ambient
     );
 
-    scene.add(ambient);
 
-    const sun = new THREE.DirectionalLight(
-        0xffffff,
-        1.2
-    );
+    const sun =
+        new THREE.DirectionalLight(
+
+            0xffffff,
+
+            1.2
+
+        );
+
 
     sun.position.set(
-        30,
-        60,
-        20
+
+        50,
+
+        100,
+
+        30
+
     );
 
-    scene.add(sun);
-}
 
-/* =====================================================
-   КЛЮЧ БЛОКА
-===================================================== */
-
-function blockKey(x, y, z) {
-
-    return `${x},${y},${z}`;
-}
-
-/* =====================================================
-   СОЗДАНИЕ БЛОКА
-===================================================== */
-
-function createBlock(x, y, z, type) {
-
-    const key = blockKey(x, y, z);
-
-    if (world.has(key)) {
-        return;
-    }
-
-    const geometry =
-        new THREE.BoxGeometry(1, 1, 1);
-
-    let materials;
-
-    if (type === "grass") {
-
-        materials = [
-            new THREE.MeshLambertMaterial({
-                color: 0x65a94c
-            }),
-
-            new THREE.MeshLambertMaterial({
-                color: 0x65a94c
-            }),
-
-            new THREE.MeshLambertMaterial({
-                color: 0x59b83f
-            }),
-
-            new THREE.MeshLambertMaterial({
-                color: 0x8b5a32
-            }),
-
-            new THREE.MeshLambertMaterial({
-                color: 0x65a94c
-            }),
-
-            new THREE.MeshLambertMaterial({
-                color: 0x65a94c
-            })
-        ];
-
-    } else {
-
-        const color =
-            BLOCKS[type]?.color || 0xffffff;
-
-        const material =
-            new THREE.MeshLambertMaterial({
-                color
-            });
-
-        materials = [
-            material,
-            material,
-            material,
-            material,
-            material,
-            material
-        ];
-    }
-
-    const mesh =
-        new THREE.Mesh(
-            geometry,
-            materials
-        );
-
-    mesh.position.set(
-        x + 0.5,
-        y + 0.5,
-        z + 0.5
+    scene.add(
+        sun
     );
 
-    mesh.userData.block = true;
-    mesh.userData.type = type;
-
-    scene.add(mesh);
-
-    world.set(key, {
-        mesh,
-        type
-    });
 }
 
+
 /* =====================================================
-   УДАЛЕНИЕ БЛОКА
+   ЧАНКОВАЯ СИСТЕМА
 ===================================================== */
 
-function removeBlock(x, y, z) {
 
-    const key = blockKey(x, y, z);
+/*
+Получить координату чанка.
+*/
 
-    const block = world.get(key);
+function worldToChunk(value) {
 
-    if (!block) {
-        return;
+    return Math.floor(
+        value / CHUNK_SIZE
+    );
+
+}
+
+
+/*
+Ключ чанка.
+*/
+
+function chunkKey(cx, cz) {
+
+    return `${cx},${cz}`;
+
+}
+
+
+/*
+Получить локальную координату блока.
+*/
+
+function localCoordinate(value) {
+
+    let result =
+        value % CHUNK_SIZE;
+
+
+    if (result < 0) {
+
+        result +=
+            CHUNK_SIZE;
+
     }
 
-    scene.remove(block.mesh);
 
-    block.mesh.geometry.dispose();
+    return result;
 
-    if (Array.isArray(block.mesh.material)) {
+}
 
-        block.mesh.material.forEach(
-            material => material.dispose()
+
+/* =====================================================
+   ЗАГРУЗКА ЧАНКОВ
+===================================================== */
+
+function updateChunks() {
+
+    const playerChunkX =
+        worldToChunk(player.x);
+
+
+    const playerChunkZ =
+        worldToChunk(player.z);
+
+
+    const needed =
+        new Set();
+
+
+    for (
+
+        let dx =
+            -RENDER_DISTANCE;
+
+        dx <=
+            RENDER_DISTANCE;
+
+        dx++
+
+    ) {
+
+        for (
+
+            let dz =
+                -RENDER_DISTANCE;
+
+            dz <=
+                RENDER_DISTANCE;
+
+            dz++
+
+        ) {
+
+            /*
+            Круглая область
+            */
+
+            if (
+
+                dx * dx +
+                dz * dz >
+                RENDER_DISTANCE *
+                RENDER_DISTANCE
+
+            ) {
+
+                continue;
+
+            }
+
+
+            const cx =
+                playerChunkX + dx;
+
+
+            const cz =
+                playerChunkZ + dz;
+
+
+            const key =
+                chunkKey(cx, cz);
+
+
+            needed.add(key);
+
+
+            if (
+                !chunks.has(key)
+            ) {
+
+                createChunk(
+                    cx,
+                    cz
+                );
+
+            }
+
+        }
+
+    }
+
+
+    /*
+    -----------------------------------------------------
+    ВЫГРУЗКА ДАЛЬНИХ ЧАНКОВ
+    -----------------------------------------------------
+    */
+
+    for (
+        const [key, chunk]
+        of chunks
+    ) {
+
+        if (
+            !needed.has(key)
+        ) {
+
+            unloadChunk(
+                chunk.cx,
+                chunk.cz
+            );
+
+        }
+
+    }
+
+}
+
+
+/* =====================================================
+   СОЗДАНИЕ ЧАНКА
+===================================================== */
+
+function createChunk(cx, cz) {
+
+    const key =
+        chunkKey(
+            cx,
+            cz
         );
 
-    } else {
 
-        block.mesh.material.dispose();
+    if (
+        chunks.has(key)
+    ) {
+
+        return;
 
     }
 
-    world.delete(key);
+
+    const chunk = {
+
+        cx,
+
+        cz,
+
+        blocks: new Map(),
+
+        meshes: []
+
+    };
+
+
+    chunks.set(
+        key,
+        chunk
+    );
+
+
+    generateChunk(
+        chunk
+    );
+
 }
 
+
 /* =====================================================
-   ГЕНЕРАЦИЯ МИРА
+   ГЕНЕРАЦИЯ ЧАНКА
 ===================================================== */
 
-function generateWorld() {
+function generateChunk(chunk) {
 
-    const size = 30;
+    const startX =
+        chunk.cx *
+        CHUNK_SIZE;
 
-    for (let x = -size; x < size; x++) {
 
-        for (let z = -size; z < size; z++) {
+    const startZ =
+        chunk.cz *
+        CHUNK_SIZE;
+
+
+    for (
+
+        let lx = 0;
+
+        lx < CHUNK_SIZE;
+
+        lx++
+
+    ) {
+
+        for (
+
+            let lz = 0;
+
+            lz < CHUNK_SIZE;
+
+            lz++
+
+        ) {
+
+            const x =
+                startX + lx;
+
+
+            const z =
+                startZ + lz;
+
 
             const height =
-                getTerrainHeight(x, z);
+                getTerrainHeight(
+                    x,
+                    z
+                );
 
-            for (let y = 0; y <= height; y++) {
+
+            /*
+            ------------------------------------------------
+            БЛОКИ ЗЕМЛИ
+            ------------------------------------------------
+            */
+
+            for (
+
+                let y = 0;
+
+                y <= height;
+
+                y++
+
+            ) {
 
                 let type;
 
-                if (y === height) {
 
-                    type = "grass";
+                if (
+                    y === height
+                ) {
 
-                } else if (y >= height - 2) {
+                    type =
+                        "grass";
 
-                    type = "dirt";
-
-                } else {
-
-                    type = "stone";
                 }
 
-                createBlock(
+                else if (
+                    y >=
+                    height - 3
+                ) {
+
+                    type =
+                        "dirt";
+
+                }
+
+                else {
+
+                    type =
+                        "stone";
+
+                }
+
+
+                addBlockToChunk(
+
+                    chunk,
+
                     x,
+
                     y,
+
                     z,
+
                     type
+
                 );
+
             }
+
+
+            /*
+            ------------------------------------------------
+            ДЕРЕВЬЯ
+            ------------------------------------------------
+            */
+
+            if (
+                shouldGenerateTree(
+                    x,
+                    z
+                )
+            ) {
+
+                generateTree(
+
+                    chunk,
+
+                    x,
+
+                    height + 1,
+
+                    z
+
+                );
+
+            }
+
         }
+
     }
 
-    generateTrees();
+
+    /*
+    После генерации создаём mesh.
+    */
+
+    buildChunkMesh(
+        chunk
+    );
+
 }
+
 
 /* =====================================================
    ВЫСОТА ТЕРРЕЙНА
@@ -341,126 +757,606 @@ function generateWorld() {
 
 function getTerrainHeight(x, z) {
 
-    const wave1 =
-        Math.sin(x * 0.16) * 2;
+    const a =
+        Math.sin(
+            x * 0.08
+        ) * 4;
 
-    const wave2 =
-        Math.cos(z * 0.14) * 2;
 
-    const wave3 =
-        Math.sin((x + z) * 0.08) * 2;
+    const b =
+        Math.cos(
+            z * 0.07
+        ) * 4;
+
+
+    const c =
+        Math.sin(
+            (x + z) *
+            0.035
+        ) * 7;
+
+
+    const d =
+        Math.cos(
+            (x - z) *
+            0.02
+        ) * 3;
+
 
     let height =
         Math.floor(
-            3 +
-            wave1 +
-            wave2 +
-            wave3
+
+            10 +
+            a +
+            b +
+            c +
+            d
+
         );
 
+
     return Math.max(
+
         1,
+
         Math.min(
-            9,
+
+            WORLD_HEIGHT - 5,
+
             height
+
         )
+
     );
+
 }
+
 
 /* =====================================================
    ДЕРЕВЬЯ
 ===================================================== */
 
-function generateTrees() {
+function shouldGenerateTree(x, z) {
 
-    for (let x = -25; x < 25; x++) {
+    /*
+    Детеминированное значение.
 
-        for (let z = -25; z < 25; z++) {
+    Это важно:
 
-            const random =
-                Math.random();
+    один и тот же мир
+    должен генерироваться
+    одинаково после перезагрузки.
+    */
 
-            if (random > 0.97) {
+    const value =
+        Math.abs(
 
-                const y =
-                    getTerrainHeight(x, z) + 1;
+            Math.sin(
 
-                createTree(
-                    x,
-                    y,
-                    z
-                );
-            }
-        }
-    }
+                x * 12.9898 +
+                z * 78.233
+
+            ) *
+
+            43758.5453
+
+        );
+
+
+    const random =
+        value -
+        Math.floor(value);
+
+
+    return random > 0.985;
+
 }
 
-function createTree(x, y, z) {
 
-    const trunkHeight = 4;
+/* =====================================================
+   СОЗДАНИЕ ДЕРЕВА
+===================================================== */
 
-    for (let i = 0; i < trunkHeight; i++) {
+function generateTree(
+    chunk,
+    x,
+    y,
+    z
+) {
 
-        createBlock(
-            x,
-            y + i,
-            z,
-            "wood"
-        );
-    }
+    const height = 4;
 
-    const leafStart =
-        y + trunkHeight - 2;
+
+    /*
+    Ствол
+    */
 
     for (
-        let lx = -2;
-        lx <= 2;
-        lx++
+        let i = 0;
+        i < height;
+        i++
+    ) {
+
+        addBlockToChunk(
+
+            chunk,
+
+            x,
+
+            y + i,
+
+            z,
+
+            "wood"
+
+        );
+
+    }
+
+
+    /*
+    Листья
+    */
+
+    for (
+        let dx = -2;
+        dx <= 2;
+        dx++
     ) {
 
         for (
-            let lz = -2;
-            lz <= 2;
-            lz++
+            let dz = -2;
+            dz <= 2;
+            dz++
         ) {
 
             for (
-                let ly = 0;
-                ly <= 2;
-                ly++
+                let dy = 0;
+                dy <= 2;
+                dy++
             ) {
 
                 const distance =
-                    Math.abs(lx) +
-                    Math.abs(lz);
+                    Math.abs(dx) +
+                    Math.abs(dz);
+
 
                 if (
                     distance <= 3
                 ) {
 
-                    createBlock(
-                        x + lx,
-                        leafStart + ly,
-                        z + lz,
+                    addBlockToChunk(
+
+                        chunk,
+
+                        x + dx,
+
+                        y + height - 2 + dy,
+
+                        z + dz,
+
                         "leaves"
+
                     );
+
                 }
+
             }
+
         }
+
     }
+
 }
+
 
 /* =====================================================
-   ИГРОК
+   ДОБАВЛЕНИЕ БЛОКА В ЧАНК
 ===================================================== */
 
-function createPlayer() {
+function addBlockToChunk(
+    chunk,
+    x,
+    y,
+    z,
+    type
+) {
+
+    if (
+        y < 0 ||
+        y >= WORLD_HEIGHT
+    ) {
+
+        return;
+
+    }
+
+
+    const lx =
+        localCoordinate(x);
+
+
+    const lz =
+        localCoordinate(z);
+
+
+    const key =
+        `${lx},${y},${lz}`;
+
+
+    if (
+        chunk.blocks.has(key)
+    ) {
+
+        return;
+
+    }
+
+
+    chunk.blocks.set(
+
+        key,
+
+        {
+
+            x,
+
+            y,
+
+            z,
+
+            type
+
+        }
+
+    );
+
+
+    worldBlocks.set(
+
+        blockKey(
+            x,
+            y,
+            z
+        ),
+
+        {
+
+            type,
+
+            chunkKey:
+                chunkKey(
+                    chunk.cx,
+                    chunk.cz
+                )
+
+        }
+
+    );
+
+}
+
+
+/* =====================================================
+   ПОСТРОЕНИЕ MESH ЧАНКА
+===================================================== */
+
+function buildChunkMesh(chunk) {
+
+    /*
+    В этой версии используем
+    face culling.
+
+    Невидимые грани блоков
+    не создаются.
+    */
+
+
+    for (
+        const block
+        of chunk.blocks.values()
+    ) {
+
+        createVisibleBlock(
+            chunk,
+            block
+        );
+
+    }
+
+}
+
+
+/* =====================================================
+   СОЗДАНИЕ ВИДИМОГО БЛОКА
+===================================================== */
+
+function createVisibleBlock(
+    chunk,
+    block
+) {
+
+    const {
+
+        x,
+
+        y,
+
+        z,
+
+        type
+
+    } = block;
+
+
+    const visibleFaces = {
+
+        px: !hasBlock(
+            x + 1,
+            y,
+            z
+        ),
+
+        nx: !hasBlock(
+            x - 1,
+            y,
+            z
+        ),
+
+        py: !hasBlock(
+            x,
+            y + 1,
+            z
+        ),
+
+        ny: !hasBlock(
+            x,
+            y - 1,
+            z
+        ),
+
+        pz: !hasBlock(
+            x,
+            y,
+            z + 1
+        ),
+
+        nz: !hasBlock(
+            x,
+            y,
+            z - 1
+        )
+
+    };
+
+
+    /*
+    Если блок полностью
+    окружён другими блоками,
+    он не нужен для рендера.
+    */
+
+    if (
+
+        !visibleFaces.px &&
+        !visibleFaces.nx &&
+        !visibleFaces.py &&
+        !visibleFaces.ny &&
+        !visibleFaces.pz &&
+        !visibleFaces.nz
+
+    ) {
+
+        return;
+
+    }
+
+
+    /*
+    Пока создаём cube.
+    Следующим этапом заменим
+    это на настоящий greedy meshing.
+    */
+
+    const geometry =
+        new THREE.BoxGeometry(
+            1,
+            1,
+            1
+        );
+
+
+    const color =
+        BLOCKS[type]
+            ? BLOCKS[type].color
+            : 0xffffff;
+
+
+    const material =
+        new THREE.MeshLambertMaterial({
+
+            color
+
+        });
+
+
+    const mesh =
+        new THREE.Mesh(
+
+            geometry,
+
+            material
+
+        );
+
+
+    mesh.position.set(
+
+        x + 0.5,
+
+        y + 0.5,
+
+        z + 0.5
+
+    );
+
+
+    mesh.userData.block = true;
+
+    mesh.userData.x = x;
+
+    mesh.userData.y = y;
+
+    mesh.userData.z = z;
+
+    mesh.userData.type = type;
+
+
+    scene.add(
+        mesh
+    );
+
+
+    chunk.meshes.push(
+        mesh
+    );
+
+}
+
+
+/* =====================================================
+   ПРОВЕРКА БЛОКА
+===================================================== */
+
+function hasBlock(x, y, z) {
+
+    return worldBlocks.has(
+
+        blockKey(
+            x,
+            y,
+            z
+        )
+
+    );
+
+}
+
+
+/* =====================================================
+   ВЫГРУЗКА ЧАНКА
+===================================================== */
+
+function unloadChunk(cx, cz) {
+
+    const key =
+        chunkKey(
+            cx,
+            cz
+        );
+
+
+    const chunk =
+        chunks.get(key);
+
+
+    if (!chunk) {
+
+        return;
+
+    }
+
+
+    /*
+    Удаляем mesh.
+    */
+
+    for (
+        const mesh
+        of chunk.meshes
+    ) {
+
+        scene.remove(
+            mesh
+        );
+
+
+        mesh.geometry.dispose();
+
+
+        if (
+            mesh.material
+        ) {
+
+            mesh.material.dispose();
+
+        }
+
+    }
+
+
+    /*
+    Удаляем блоки.
+    */
+
+    for (
+        const block
+        of chunk.blocks.values()
+    ) {
+
+        worldBlocks.delete(
+
+            blockKey(
+
+                block.x,
+
+                block.y,
+
+                block.z
+
+            )
+
+        );
+
+    }
+
+
+    chunks.delete(
+        key
+    );
+
+}
+
+
+/* =====================================================
+   SPAWN
+===================================================== */
+
+function spawnPlayer() {
+
+    const ground =
+        getTerrainHeight(
+            0,
+            0
+        );
+
+
+    player.x =
+        0.5;
+
+
+    player.z =
+        0.5;
+
 
     player.y =
-        getTerrainHeight(0, 0) + 1.01;
+        ground + 1.01;
+
 
     updateCamera();
+
 }
+
 
 /* =====================================================
    УПРАВЛЕНИЕ
@@ -469,189 +1365,349 @@ function createPlayer() {
 function setupControls() {
 
     window.addEventListener(
+
         "keydown",
+
         event => {
 
-            keys[event.code] = true;
+            keys[event.code] =
+                true;
+
+
+            /*
+            Прыжок
+            */
 
             if (
+
                 event.code === "Space" &&
+
                 player.grounded
+
             ) {
 
                 player.velocityY =
-                    player.jumpPower;
+                    JUMP_POWER;
 
-                player.grounded = false;
+                player.grounded =
+                    false;
+
             }
 
+
+            /*
+            Слоты
+            */
+
             if (
-                event.code.startsWith("Digit")
+                event.code.startsWith(
+                    "Digit"
+                )
             ) {
 
                 const number =
                     parseInt(
-                        event.code.replace(
-                            "Digit",
-                            ""
-                        )
+
+                        event.code
+                            .replace(
+                                "Digit",
+                                ""
+                            )
+
                     );
 
-                selectSlot(number);
+
+                selectSlot(
+                    number
+                );
+
             }
+
         }
+
     );
+
 
     window.addEventListener(
+
         "keyup",
+
         event => {
 
-            keys[event.code] = false;
+            keys[event.code] =
+                false;
 
         }
+
     );
 
-    document.getElementById(
-        "playButton"
-    ).addEventListener(
-        "click",
-        startGame
-    );
+
+    /*
+    Кнопка игры
+    */
+
+    const playButton =
+        document.getElementById(
+            "playButton"
+        );
+
+
+    if (playButton) {
+
+        playButton.addEventListener(
+
+            "click",
+
+            startGame
+
+        );
+
+    }
+
+
+    /*
+    Pointer Lock
+    */
 
     renderer.domElement.addEventListener(
+
         "click",
+
         () => {
 
-            if (!pointerLocked) {
+            if (
+                !pointerLocked
+            ) {
 
                 lockPointer();
 
             }
+
         }
+
     );
 
+
     document.addEventListener(
+
         "pointerlockchange",
+
         () => {
 
             pointerLocked =
+
                 document.pointerLockElement ===
+
                 renderer.domElement;
 
         }
+
     );
 
+
     document.addEventListener(
+
         "mousemove",
+
         event => {
 
-            if (!pointerLocked) {
+            if (
+                !pointerLocked
+            ) {
+
                 return;
+
             }
 
-            const sensitivity = 0.002;
+
+            const sensitivity =
+                0.002;
+
 
             yaw -=
                 event.movementX *
                 sensitivity;
 
+
             pitch -=
                 event.movementY *
                 sensitivity;
 
+
             const limit =
-                Math.PI / 2 - 0.05;
+                Math.PI / 2 -
+                0.05;
+
 
             pitch =
                 Math.max(
+
                     -limit,
+
                     Math.min(
+
                         limit,
+
                         pitch
+
                     )
+
                 );
+
         }
+
     );
 
+
+    /*
+    Клики
+    */
+
     renderer.domElement.addEventListener(
+
         "mousedown",
+
         event => {
 
-            if (!pointerLocked) {
+            if (
+                !pointerLocked
+            ) {
+
                 return;
+
             }
 
-            if (event.button === 0) {
+
+            if (
+                event.button === 0
+            ) {
 
                 breakBlock();
 
-            } else if (event.button === 2) {
+            }
+
+
+            if (
+                event.button === 2
+            ) {
 
                 placeBlock();
+
             }
+
         }
+
     );
 
+
     renderer.domElement.addEventListener(
+
         "contextmenu",
+
         event => {
+
             event.preventDefault();
+
         }
+
     );
+
+
+    /*
+    Слоты
+    */
 
     document.querySelectorAll(
         ".slot"
     ).forEach(
+
         slot => {
 
             slot.addEventListener(
+
                 "click",
+
                 () => {
 
                     const slots =
                         Array.from(
+
                             document.querySelectorAll(
                                 ".slot"
                             )
+
                         );
 
-                    const index =
-                        slots.indexOf(slot);
 
-                    selectSlot(index + 1);
+                    const index =
+                        slots.indexOf(
+                            slot
+                        );
+
+
+                    selectSlot(
+                        index + 1
+                    );
+
                 }
+
             );
+
         }
+
     );
+
 }
 
+
 /* =====================================================
-   СТАРТ ИГРЫ
+   СТАРТ
 ===================================================== */
 
 function startGame() {
 
-    document.getElementById(
-        "start-screen"
-    ).style.display = "none";
+    const screen =
+        document.getElementById(
+            "start-screen"
+        );
+
+
+    if (screen) {
+
+        screen.style.display =
+            "none";
+
+    }
+
 
     lockPointer();
+
 }
+
+
+/* =====================================================
+   POINTER LOCK
+===================================================== */
 
 function lockPointer() {
 
     if (
+
         renderer &&
+
         renderer.domElement.requestPointerLock
+
     ) {
 
         renderer.domElement.requestPointerLock();
 
     }
+
 }
 
+
 /* =====================================================
-   ВЫБОР БЛОКА
+   ВЫБОР СЛОТА
 ===================================================== */
 
 function selectSlot(number) {
@@ -661,151 +1717,297 @@ function selectSlot(number) {
             ".slot"
         );
 
+
     if (
+
         number < 1 ||
-        number > slots.length
+
+        number >
+            slots.length
+
     ) {
+
         return;
+
     }
 
+
     slots.forEach(
-        slot =>
+
+        slot => {
+
             slot.classList.remove(
                 "selected"
-            )
+            );
+
+        }
+
     );
 
-    const selected =
+
+    const slot =
         slots[number - 1];
 
-    selected.classList.add(
+
+    slot.classList.add(
         "selected"
     );
 
-    selectedBlock =
-        selected.dataset.block;
 
-    document.getElementById(
-        "selectedBlock"
-    ).textContent =
-        BLOCKS[selectedBlock].name;
+    selectedBlock =
+        slot.dataset.block;
+
+
+    const label =
+        document.getElementById(
+            "selectedBlock"
+        );
+
+
+    if (label) {
+
+        label.textContent =
+            BLOCKS[
+                selectedBlock
+            ].name;
+
+    }
+
 }
+
+
+/* =====================================================
+   ИГРОК
+===================================================== */
+
+function updatePlayer(delta) {
+
+    if (
+        !pointerLocked
+    ) {
+
+        return;
+
+    }
+
+
+    let forward = 0;
+
+    let right = 0;
+
+
+    if (
+        keys["KeyW"]
+    ) {
+
+        forward += 1;
+
+    }
+
+
+    if (
+        keys["KeyS"]
+    ) {
+
+        forward -= 1;
+
+    }
+
+
+    if (
+        keys["KeyD"]
+    ) {
+
+        right += 1;
+
+    }
+
+
+    if (
+        keys["KeyA"]
+    ) {
+
+        right -= 1;
+
+    }
+
+
+    const length =
+        Math.sqrt(
+
+            forward *
+                forward +
+
+            right *
+                right
+
+        );
+
+
+    if (
+        length > 0
+    ) {
+
+        forward /=
+            length;
+
+        right /=
+            length;
+
+
+        const speed =
+            PLAYER_SPEED *
+            delta;
+
+
+        const sin =
+            Math.sin(
+                yaw
+            );
+
+
+        const cos =
+            Math.cos(
+                yaw
+            );
+
+
+        const moveX =
+
+            (
+
+                right *
+                    cos +
+
+                forward *
+                    sin
+
+            ) * speed;
+
+
+        const moveZ =
+
+            (
+
+                forward *
+                    cos -
+
+                right *
+                    sin
+
+            ) * speed;
+
+
+        movePlayer(
+
+            moveX,
+
+            moveZ
+
+        );
+
+    }
+
+
+    /*
+    Гравитация
+    */
+
+    player.velocityY -=
+
+        GRAVITY *
+        delta;
+
+
+    const vertical =
+
+        player.velocityY *
+        delta;
+
+
+    if (
+        vertical <= 0
+    ) {
+
+        if (
+            isGroundBelow()
+        ) {
+
+            player.grounded =
+                true;
+
+            player.velocityY =
+                0;
+
+        }
+
+        else {
+
+            player.grounded =
+                false;
+
+            player.y +=
+                vertical;
+
+        }
+
+    }
+
+    else {
+
+        player.grounded =
+            false;
+
+        player.y +=
+            vertical;
+
+    }
+
+
+    /*
+    Проверка земли
+    */
+
+    if (
+        isGroundBelow()
+    ) {
+
+        player.grounded =
+            true;
+
+        player.velocityY =
+            0;
+
+
+        const blockY =
+            Math.floor(
+                player.y
+            );
+
+
+        player.y =
+            blockY + 0.001;
+
+    }
+
+
+    updateCamera();
+
+}
+
 
 /* =====================================================
    ДВИЖЕНИЕ
 ===================================================== */
 
-function updatePlayer(delta) {
-
-    if (!pointerLocked) {
-        return;
-    }
-
-    let forward = 0;
-    let right = 0;
-
-    if (keys["KeyW"]) {
-        forward += 1;
-    }
-
-    if (keys["KeyS"]) {
-        forward -= 1;
-    }
-
-    if (keys["KeyD"]) {
-        right += 1;
-    }
-
-    if (keys["KeyA"]) {
-        right -= 1;
-    }
-
-    const length =
-        Math.sqrt(
-            forward * forward +
-            right * right
-        );
-
-    if (length > 0) {
-
-        forward /= length;
-        right /= length;
-
-        const speed =
-            player.speed * delta;
-
-        const sin =
-            Math.sin(yaw);
-
-        const cos =
-            Math.cos(yaw);
-
-        const moveX =
-            (
-                right * cos +
-                forward * sin
-            ) * speed;
-
-        const moveZ =
-            (
-                forward * cos -
-                right * sin
-            ) * speed;
-
-        tryMove(
-            moveX,
-            0,
-            moveZ
-        );
-    }
-
-    player.velocityY -=
-        22 * delta;
-
-    const vertical =
-        player.velocityY * delta;
-
-    if (
-        vertical <= 0 &&
-        isGroundBelow()
-    ) {
-
-        player.grounded = true;
-        player.velocityY = 0;
-
-        player.y =
-            Math.floor(player.y) + 0.001;
-
-    } else {
-
-        player.grounded = false;
-
-        player.y += vertical;
-
-        if (isGroundBelow()) {
-
-            player.grounded = true;
-            player.velocityY = 0;
-
-            player.y =
-                Math.floor(player.y) + 0.001;
-        }
-    }
-
-    updateCamera();
-}
-
-/* =====================================================
-   ДВИЖЕНИЕ С КОЛЛИЗИЯМИ
-===================================================== */
-
-function tryMove(dx, dy, dz) {
+function movePlayer(
+    dx,
+    dz
+) {
 
     const newX =
         player.x + dx;
 
-    const newZ =
-        player.z + dz;
 
     if (
         !collides(
@@ -815,8 +2017,15 @@ function tryMove(dx, dy, dz) {
         )
     ) {
 
-        player.x = newX;
+        player.x =
+            newX;
+
     }
+
+
+    const newZ =
+        player.z + dz;
+
 
     if (
         !collides(
@@ -826,110 +2035,174 @@ function tryMove(dx, dy, dz) {
         )
     ) {
 
-        player.z = newZ;
+        player.z =
+            newZ;
+
     }
+
 }
+
 
 /* =====================================================
    КОЛЛИЗИЯ
 ===================================================== */
 
-function collides(x, y, z) {
+function collides(
+    x,
+    y,
+    z
+) {
 
     const radius =
         player.radius;
+
 
     const minX =
         Math.floor(
             x - radius
         );
 
+
     const maxX =
         Math.floor(
             x + radius
         );
 
+
     const minY =
-        Math.floor(y);
+        Math.floor(
+            y
+        );
+
 
     const maxY =
         Math.floor(
-            y + player.height
+
+            y +
+            player.height
+
         );
+
 
     const minZ =
         Math.floor(
             z - radius
         );
 
+
     const maxZ =
         Math.floor(
             z + radius
         );
 
+
     for (
-        let bx = minX;
-        bx <= maxX;
+
+        let bx =
+            minX;
+
+        bx <=
+            maxX;
+
         bx++
+
     ) {
 
         for (
-            let by = minY;
-            by <= maxY;
+
+            let by =
+                minY;
+
+            by <=
+                maxY;
+
             by++
+
         ) {
 
             for (
-                let bz = minZ;
-                bz <= maxZ;
+
+                let bz =
+                    minZ;
+
+                bz <=
+                    maxZ;
+
                 bz++
+
             ) {
 
                 if (
-                    world.has(
-                        blockKey(
-                            bx,
-                            by,
-                            bz
-                        )
+
+                    hasBlock(
+
+                        bx,
+
+                        by,
+
+                        bz
+
                     )
+
                 ) {
 
                     return true;
+
                 }
+
             }
+
         }
+
     }
 
+
     return false;
+
 }
 
+
 /* =====================================================
-   ЗЕМЛЯ ПОД ИГРОКОМ
+   ЗЕМЛЯ
 ===================================================== */
 
 function isGroundBelow() {
 
     const feet =
-        player.y - 0.05;
+        player.y -
+        0.05;
+
 
     const bx =
-        Math.floor(player.x);
+        Math.floor(
+            player.x
+        );
+
 
     const by =
-        Math.floor(feet);
+        Math.floor(
+            feet
+        );
+
 
     const bz =
-        Math.floor(player.z);
+        Math.floor(
+            player.z
+        );
 
-    return world.has(
-        blockKey(
-            bx,
-            by,
-            bz
-        )
+
+    return hasBlock(
+
+        bx,
+
+        by,
+
+        bz
+
     );
+
 }
+
 
 /* =====================================================
    КАМЕРА
@@ -938,64 +2211,108 @@ function isGroundBelow() {
 function updateCamera() {
 
     camera.position.set(
+
         player.x,
-        player.y + player.height - 0.15,
+
+        player.y +
+            player.height -
+            0.15,
+
         player.z
+
     );
+
 
     camera.rotation.y =
         yaw;
 
+
     camera.rotation.x =
         pitch;
+
 }
 
-/* =====================================================
-   RAYCAST
-===================================================== */
 
-const raycaster =
-    new THREE.Raycaster();
+/* =====================================================
+   TARGET BLOCK
+===================================================== */
 
 function getTargetBlock() {
 
     raycaster.setFromCamera(
-        new THREE.Vector2(0, 0),
+
+        new THREE.Vector2(
+            0,
+            0
+        ),
+
         camera
+
     );
+
 
     const meshes = [];
 
-    world.forEach(
-        block => {
+
+    for (
+        const chunk
+        of chunks.values()
+    ) {
+
+        for (
+            const mesh
+            of chunk.meshes
+        ) {
+
             meshes.push(
-                block.mesh
+                mesh
             );
+
         }
-    );
+
+    }
+
 
     const hits =
         raycaster.intersectObjects(
+
             meshes,
+
             false
+
         );
 
-    if (hits.length === 0) {
+
+    if (
+        hits.length === 0
+    ) {
+
         return null;
+
     }
+
 
     const hit =
         hits[0];
 
-    if (hit.distance > 6) {
+
+    if (
+        hit.distance >
+        BLOCK_REACH
+    ) {
+
         return null;
+
     }
 
+
     return hit;
+
 }
 
+
 /* =====================================================
-   ЛОМАНИЕ БЛОКА
+   ЛОМАНИЕ
 ===================================================== */
 
 function breakBlock() {
@@ -1003,41 +2320,52 @@ function breakBlock() {
     const hit =
         getTargetBlock();
 
+
     if (!hit) {
+
         return;
+
     }
 
-    const position =
-        hit.object.position;
 
     const x =
-        Math.floor(
-            position.x
-        );
+        hit.object.userData.x;
+
 
     const y =
-        Math.floor(
-            position.y
-        );
+        hit.object.userData.y;
+
 
     const z =
-        Math.floor(
-            position.z
-        );
+        hit.object.userData.z;
 
-    if (y <= 0) {
+
+    if (
+        y <= 0
+    ) {
+
         return;
+
     }
 
-    removeBlock(
+
+    setBlock(
+
         x,
+
         y,
-        z
+
+        z,
+
+        null
+
     );
+
 }
 
+
 /* =====================================================
-   УСТАНОВКА БЛОКА
+   УСТАНОВКА
 ===================================================== */
 
 function placeBlock() {
@@ -1045,96 +2373,491 @@ function placeBlock() {
     const hit =
         getTargetBlock();
 
+
     if (!hit) {
+
         return;
+
     }
+
 
     const normal =
         hit.face.normal;
 
-    const position =
-        hit.object.position;
 
     const x =
-        Math.floor(
-            position.x +
-            normal.x
-        );
+        hit.object.userData.x +
+        normal.x;
+
 
     const y =
-        Math.floor(
-            position.y +
-            normal.y
-        );
+        hit.object.userData.y +
+        normal.y;
+
 
     const z =
-        Math.floor(
-            position.z +
-            normal.z
-        );
+        hit.object.userData.z +
+        normal.z;
+
 
     if (
-        world.has(
+        hasBlock(
+            x,
+            y,
+            z
+        )
+    ) {
+
+        return;
+
+    }
+
+
+    /*
+    Не разрешаем поставить
+    блок внутрь игрока.
+    */
+
+    if (
+
+        Math.abs(
+            x + 0.5 -
+            player.x
+        ) < 0.8 &&
+
+        Math.abs(
+            y + 0.5 -
+            player.y
+        ) < 1.8 &&
+
+        Math.abs(
+            z + 0.5 -
+            player.z
+        ) < 0.8
+
+    ) {
+
+        return;
+
+    }
+
+
+    setBlock(
+
+        x,
+
+        y,
+
+        z,
+
+        selectedBlock
+
+    );
+
+}
+
+
+/* =====================================================
+   ИЗМЕНЕНИЕ БЛОКА
+===================================================== */
+
+function setBlock(
+    x,
+    y,
+    z,
+    type
+) {
+
+    const cx =
+        worldToChunk(
+            x
+        );
+
+
+    const cz =
+        worldToChunk(
+            z
+        );
+
+
+    const key =
+        chunkKey(
+            cx,
+            cz
+        );
+
+
+    let chunk =
+        chunks.get(key);
+
+
+    /*
+    Если чанк не загружен,
+    ничего не делаем.
+    */
+
+    if (!chunk) {
+
+        return;
+
+    }
+
+
+    const localX =
+        localCoordinate(
+            x
+        );
+
+
+    const localZ =
+        localCoordinate(
+            z
+        );
+
+
+    const blockKeyLocal =
+        `${localX},${y},${localZ}`;
+
+
+    /*
+    -----------------------------------------------------
+    УДАЛЕНИЕ
+    -----------------------------------------------------
+    */
+
+    if (
+        type === null
+    ) {
+
+        chunk.blocks.delete(
+            blockKeyLocal
+        );
+
+
+        worldBlocks.delete(
+
             blockKey(
                 x,
                 y,
                 z
             )
-        )
-    ) {
-        return;
+
+        );
+
     }
 
-    if (
-        Math.abs(
-            x - player.x
-        ) < 1 &&
-        Math.abs(
-            y - player.y
-        ) < 2 &&
-        Math.abs(
-            z - player.z
-        ) < 1
-    ) {
-        return;
+
+    /*
+    -----------------------------------------------------
+    ДОБАВЛЕНИЕ
+    -----------------------------------------------------
+    */
+
+    else {
+
+        chunk.blocks.set(
+
+            blockKeyLocal,
+
+            {
+
+                x,
+
+                y,
+
+                z,
+
+                type
+
+            }
+
+        );
+
+
+        worldBlocks.set(
+
+            blockKey(
+                x,
+                y,
+                z
+            ),
+
+            {
+
+                type,
+
+                chunkKey:
+                    key
+
+            }
+
+        );
+
     }
 
-    createBlock(
-        x,
-        y,
-        z,
-        selectedBlock
+
+    /*
+    Перестраиваем чанк
+    */
+
+    rebuildChunk(
+        chunk
     );
+
+
+    /*
+    Также соседние чанки,
+    если блок находится
+    на границе.
+    */
+
+    rebuildNeighbors(
+        x,
+        z
+    );
+
 }
 
+
 /* =====================================================
-   КООРДИНАТЫ
+   ПЕРЕСТРОЙКА ЧАНКА
+===================================================== */
+
+function rebuildChunk(chunk) {
+
+    for (
+        const mesh
+        of chunk.meshes
+    ) {
+
+        scene.remove(
+            mesh
+        );
+
+
+        mesh.geometry.dispose();
+
+
+        mesh.material.dispose();
+
+    }
+
+
+    chunk.meshes =
+        [];
+
+
+    buildChunkMesh(
+        chunk
+    );
+
+}
+
+
+/* =====================================================
+   СОСЕДНИЕ ЧАНКИ
+===================================================== */
+
+function rebuildNeighbors(
+    x,
+    z
+) {
+
+    const lx =
+        localCoordinate(
+            x
+        );
+
+
+    const lz =
+        localCoordinate(
+            z
+        );
+
+
+    if (
+        lx === 0
+    ) {
+
+        rebuildChunkByWorld(
+
+            x - 1,
+
+            z
+
+        );
+
+    }
+
+
+    if (
+        lx ===
+        CHUNK_SIZE - 1
+    ) {
+
+        rebuildChunkByWorld(
+
+            x + 1,
+
+            z
+
+        );
+
+    }
+
+
+    if (
+        lz === 0
+    ) {
+
+        rebuildChunkByWorld(
+
+            x,
+
+            z - 1
+
+        );
+
+    }
+
+
+    if (
+        lz ===
+        CHUNK_SIZE - 1
+    ) {
+
+        rebuildChunkByWorld(
+
+            x,
+
+            z + 1
+
+        );
+
+    }
+
+}
+
+
+/* =====================================================
+   REBUILD ПО МИРОВЫМ КООРДИНАТАМ
+===================================================== */
+
+function rebuildChunkByWorld(
+    x,
+    z
+) {
+
+    const cx =
+        worldToChunk(
+            x
+        );
+
+
+    const cz =
+        worldToChunk(
+            z
+        );
+
+
+    const chunk =
+        chunks.get(
+
+            chunkKey(
+                cx,
+                cz
+            )
+
+        );
+
+
+    if (
+        chunk
+    ) {
+
+        rebuildChunk(
+            chunk
+        );
+
+    }
+
+}
+
+
+/* =====================================================
+   BLOCK KEY
+===================================================== */
+
+function blockKey(
+    x,
+    y,
+    z
+) {
+
+    return `${x},${y},${z}`;
+
+}
+
+
+/* =====================================================
+   КООРДИНАТЫ HUD
 ===================================================== */
 
 function updateCoordinates() {
 
-    document.getElementById(
-        "x"
-    ).textContent =
-        Math.floor(player.x);
+    const x =
+        document.getElementById(
+            "x"
+        );
 
-    document.getElementById(
-        "y"
-    ).textContent =
-        Math.floor(player.y);
 
-    document.getElementById(
-        "z"
-    ).textContent =
-        Math.floor(player.z);
+    const y =
+        document.getElementById(
+            "y"
+        );
+
+
+    const z =
+        document.getElementById(
+            "z"
+        );
+
+
+    if (x) {
+
+        x.textContent =
+            Math.floor(
+                player.x
+            );
+
+    }
+
+
+    if (y) {
+
+        y.textContent =
+            Math.floor(
+                player.y
+            );
+
+    }
+
+
+    if (z) {
+
+        z.textContent =
+            Math.floor(
+                player.z
+            );
+
+    }
+
 }
 
-/* =====================================================
-   ИГРОВОЙ ЦИКЛ
-===================================================== */
 
-let previousTime =
-    performance.now();
+/* =====================================================
+   GAME LOOP
+===================================================== */
 
 function animate() {
 
@@ -1142,15 +2865,21 @@ function animate() {
         animate
     );
 
-    const currentTime =
+
+    const now =
         performance.now();
 
-    let delta =
-        (currentTime - previousTime)
-        / 1000;
 
-    previousTime =
-        currentTime;
+    let delta =
+        (
+            now -
+            lastTime
+        ) / 1000;
+
+
+    lastTime =
+        now;
+
 
     delta =
         Math.min(
@@ -1158,36 +2887,73 @@ function animate() {
             0.05
         );
 
-    updatePlayer(delta);
+
+    /*
+    Обновляем чанки.
+    */
+
+    updateChunks();
+
+
+    /*
+    Игрок.
+    */
+
+    updatePlayer(
+        delta
+    );
+
+
+    /*
+    HUD.
+    */
 
     updateCoordinates();
 
+
+    /*
+    Рендер.
+    */
+
     renderer.render(
+
         scene,
+
         camera
+
     );
+
 }
+
 
 /* =====================================================
    RESIZE
 ===================================================== */
 
-function onResize() {
+function resize() {
 
     camera.aspect =
+
         window.innerWidth /
         window.innerHeight;
 
+
     camera.updateProjectionMatrix();
 
+
     renderer.setSize(
+
         window.innerWidth,
+
         window.innerHeight
+
     );
+
 }
 
+
 /* =====================================================
-   ЗАПУСК
+   START
 ===================================================== */
 
 init();

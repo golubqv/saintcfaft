@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    >
+
+    <title>MyCraft Web</title>
+
+    <link rel="stylesheet" href="style.css">
+
+    <script
+        src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"
+    ></script>
+</head>
+
+<body>
+
+    <div id="game"></div>
+
+    <div id="crosshair">
+        <span></span>
+        <span></span>
+    </div>
+
+    <div id="loading">
+        <div class="loading-title">MYCRAFT</div>
+        <div class="loading-text">Создание мира...</div>
+    </div>
+
+    <div id="hud">
+
+        <div id="coordinates">
+            X: <span id="x">0</span>
+            Y: <span id="y">0</span>
+            Z: <span id="z">0</span>
+        </div>
+
+        <div id="block-info">
+            Блок: <span id="selectedBlock">Трава</span>
+        </div>
+
+        <div id="hotbar">
+
+            <div class="slot selected" data-block="grass">
+                <div class="block-icon grass"></div>
+                <span>1</span>
+            </div>
+
+            <div class="slot" data-block="dirt">
+                <div class="block-icon dirt"></div>
+                <span>2</span>
+            </div>
+
+            <div class="slot" data-block="stone">
+                <div class="block-icon stone"></div>
+                <span>3</span>
+            </div>
+
+            <div class="slot" data-block="wood">
+                <div class="block-icon wood"></div>
+                <span>4</span>
+            </div>
+
+            <div class="slot" data-block="leaves">
+                <div class="block-icon leaves"></div>
+                <span>5</span>
+            </div>
+
+        </div>
+
+    </div>
+
+    <div id="start-screen">
+
+        <div class="logo">MYCRAFT</div>
+
+        <div class="subtitle">
+            WEB EDITION
+        </div>
+
+        <button id="playButton">
+            ИГРАТЬ
+        </button>
+
+        <div class="controls">
+            <div>W A S D — движение</div>
+            <div>SPACE — прыжок</div>
+            <div>ЛКМ — разрушить блок</div>
+            <div>ПКМ — поставить блок</div>
+            <div>1–5 — выбрать блок</div>
+            <div>ESC — освободить мышь</div>
+        </div>
+
+    </div>
+
+    <script src="game.js"></script>
+
+</body>
+</html>
